@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <time.h>
 
+// lcg capability cause rand() sucks
 struct rng {
   uint64_t raw;
 };
@@ -53,6 +54,9 @@ bool key_eq(struct key a, struct key b) {
   return a.raw == b.raw;
 }
 
+// we pack state;
+// - 0bX0000 is the alive bit,
+// - 0b0XXXX are the count bits since we need to store [0, 8]
 #define ALIVE_MASK (1u << 4)
 #define COUNT_MASK (ALIVE_MASK - 1u)
 
@@ -72,7 +76,8 @@ struct table {
 
 void table_init(struct table *t, uint32_t exp) {
   assert(t);
-  assert(exp >= 1 && exp <= 31); // 32 - exp must be a valid shift
+  // (32-exp) must be a valid shift
+  assert(exp >= 1 && exp <= 31);
   t->exp = exp;
   t->slots = calloc((1u << t->exp), sizeof(struct slot));
   t->dirty = malloc((1u << t->exp) * sizeof(size_t));
@@ -88,14 +93,17 @@ void table_free(struct table *t) {
 
 void table_clear(struct table *t) {
   assert(t);
-  // only zero the slots we actually touched -- O(live), not O(capacity)
+  // instead of iteration over O(everything), we iterate over O(alive)
+  // - we track 'life' using a dirty list
   for (size_t i = 0; i < t->len; ++i) {
     t->slots[t->dirty[i]].key.raw = 0;
   }
   t->len = 0;
 }
 
-// mask-step-index probe, lifted straight from shakespoof / nullprogram
+// mask-step-index probe
+// - https://nullprogram.com/blog/2022/08/08/
+// - https://github.com/WalkerRout/shakespoof/blob/main/src/main.c#L119
 struct slot *table_slot(struct table *t, struct key key) {
   uint32_t hash = (uint32_t)key_hash(key);
   uint32_t mask = (uint32_t)((1u << t->exp) - 1);
@@ -221,8 +229,8 @@ void world_dump(struct world *w, FILE *out, size_t gen) {
   assert(w);
   assert(out);
   // bring cursor to home, flickers otherwise
-  fputs("\x1b[H", stdout);
-  printf("generation %zu (%zu live)\x1b[K\n", gen, w->cur.len);
+  fputs("\x1b[H", out);
+  fprintf(out, "generation %zu (%zu live)\x1b[K\n", gen, w->cur.len);
   uint32_t width = (uint32_t)w->width;
   uint32_t height = (uint32_t)w->height;
   for (uint32_t y = 0; y < height; ++y) {
