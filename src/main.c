@@ -235,13 +235,18 @@ void world_dump(struct world *w, FILE *out, size_t gen) {
     fputc('\n', out);
   }
   fputc('\n', out);
+  // flush remaining bytes
+  fflush(out);
 }
 
 int main(void) {
   struct rng rng = rng_new();
 
   struct world w = {0};
-  world_init(&w, &rng, 25, 25);
+  world_init(&w, &rng, 50, 50);
+
+  // full buffer 1<<16 bytes
+  setvbuf(stdout, NULL, _IOFBF, (size_t)1 << 16);
 
   // clear screen at start; dims are fixed
   fputs("\x1b[2J", stdout);
