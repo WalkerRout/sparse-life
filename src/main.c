@@ -62,6 +62,7 @@ bool key_eq(struct key a, struct key b) {
 
 struct slot {
   struct key key;
+  // technically we only use 5 bits but padding gets us
   uint32_t state;
 };
 
@@ -80,8 +81,9 @@ void table_init(struct table *t, uint32_t exp) {
   assert(exp >= 1 && exp <= 31);
   t->exp = exp;
   t->slots = calloc((1u << t->exp), sizeof(struct slot));
+  assert(t->slots);
   t->dirty = malloc((1u << t->exp) * sizeof(size_t));
-  assert(t->slots && t->dirty);
+  assert(t->slots);
   t->len = 0;
 }
 
@@ -96,7 +98,8 @@ void table_clear(struct table *t) {
   // instead of iteration over O(everything), we iterate over O(alive)
   // - we track 'life' using a dirty list
   for (size_t i = 0; i < t->len; ++i) {
-    t->slots[t->dirty[i]].key.raw = 0;
+    size_t live = t->dirty[i];
+    t->slots[live].key = (struct key){0};
   }
   t->len = 0;
 }
@@ -171,10 +174,10 @@ void world_init(struct world *w, struct rng *rng, size_t width, size_t height) {
   assert(height > 0 && height <= (size_t)(UINT32_MAX >> 1));
   w->width = width;
   w->height = height;
-  // both tables hold at most W*H distinct grid cells; size them to area plus
-  // half-again headroom (load <= ~2/3) so the table stays cache-resident
-  // instead of scattering across a fixed 2^20.
+  // both tables hold area distinct grid cells; size the tables to the area for
+  // load ~0.6, we can keep the table small and in cache since world size is fixed
   size_t area = width * height;
+  // +(area/2) gives us .5, and rounding to next pot gives around ~0.66
   uint32_t exp = ceil_exp(area + area / 2);
   table_init(&w->cur, exp);
   table_init(&w->acc, exp);
@@ -187,6 +190,7 @@ void world_free(struct world *w) {
   table_free(&w->acc);
 }
 
+// tandem neighbour offsets
 static const int32_t DX[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
 static const int32_t DY[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
 
@@ -194,9 +198,9 @@ void world_step(struct world *w) {
   assert(w);
   uint32_t width = (uint32_t)w->width;
   uint32_t height = (uint32_t)w->height;
-  table_clear(&w->acc);
 
   // scatter
+  table_clear(&w->acc);
   for (size_t i = 0; i < w->cur.len; ++i) {
     struct slot *s = &w->cur.slots[w->cur.dirty[i]];
     uint32_t x = key_x(s->key, width);
@@ -204,6 +208,8 @@ void world_step(struct world *w) {
     // mark cell as alive in accumulator
     table_intern(&w->acc, s->key)->state |= ALIVE_MASK;
     for (size_t n = 0; n < 8u; ++n) {
+      // modular arithmetic; adding +width keeps our numbers in the unsigned range...
+      // - safe because of our proof assertions in world_init
       uint32_t nx = (x + width + (uint32_t)DX[n]) % width;
       uint32_t ny = (y + height + (uint32_t)DY[n]) % height;
       // reindex neighbours in accumulator
@@ -237,7 +243,7 @@ void world_dump(struct world *w, FILE *out, size_t gen) {
     for (uint32_t x = 0; x < width; ++x) {
       bool live = !key_empty(table_slot(&w->cur, key_new(x, y, width))->key);
       fputc(' ', out);
-      fputc(live ? 'X' : '.', out);
+      fputc(live ? '@' : '.', out);
       fputc(' ', out);
     }
     fputc('\n', out);
@@ -261,6 +267,7 @@ int main(void) {
   for (size_t gen = 0;; ++gen) {
     world_dump(&w, stdout, gen);
     world_step(&w);
+    // should probably add a sleep here but its fun to watch the funnies go fast
   }
   world_free(&w);
 
